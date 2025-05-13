@@ -1,6 +1,6 @@
 import { getConnection, sql } from "../db.js";
 
-// ✅ GET handler
+// ✅ GET all thresholds
 export const getThresholds = async (req, res) => {
   try {
     const pool = await getConnection();
@@ -25,13 +25,14 @@ export const getThresholds = async (req, res) => {
   }
 };
 
-// ✅ POST handler (already done)
+// ✅ POST update or insert thresholds (admin-protected)
 export const updateThresholds = async (req, res) => {
   const updatedBy = req.user.username;
   const payload = Array.isArray(req.body) ? req.body : [req.body];
 
   try {
     const pool = await getConnection();
+
     const queries = payload.map((row) => {
       const { plant, machine, tag_name, min_value, max_value, gauge_min, gauge_max } = row;
 
@@ -71,6 +72,7 @@ export const updateThresholds = async (req, res) => {
   }
 };
 
+// ✅ GET thresholds for a specific machine (used in MachineModal)
 export const getThresholdsByMachine = async (req, res) => {
   const { name, line } = req.query;
 

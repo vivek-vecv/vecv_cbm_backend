@@ -1,15 +1,17 @@
 import express from 'express';
 import { getConnection, sql } from "../db.js";
-import { getThresholdsByMachine } from "../controllers/thresholdController.js";
-
-
-
+import { getThresholdsByMachine, updateThresholds } from "../controllers/thresholdController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
 
 const router = express.Router();
-router.get("/thresholds/by-machine", getThresholdsByMachine);
 
+// ✅ Get all thresholds for a specific plant & machine
 router.get('/thresholds', async (req, res) => {
   const { plant, machine } = req.query;
+
+  if (!plant || !machine) {
+    return res.status(400).json({ message: "Missing plant or machine parameter" });
+  }
 
   try {
     const pool = await getConnection();
@@ -28,5 +30,11 @@ router.get('/thresholds', async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// ✅ Get thresholds by machine name and line
+router.get("/thresholds/by-machine", getThresholdsByMachine);
+
+// ✅ Update or insert thresholds (protected)
+router.post("/thresholds", verifyToken, updateThresholds);
 
 export default router;
