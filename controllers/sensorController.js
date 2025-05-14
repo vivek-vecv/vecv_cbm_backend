@@ -2,6 +2,7 @@ import { getConnection, sql } from "../db.js";
 
 export const getLatestSensorData = async (req, res) => {
   try {
+    console.log("📡 Hit /api/sensors/latest");
     const pool = await getConnection();
 
     const result = await pool.request().query(`
@@ -17,12 +18,13 @@ export const getLatestSensorData = async (req, res) => {
   }
 };
 
-
 export const getSensorHistory = async (req, res) => {
   const { plant, machine, tags, minutes } = req.query;
 
   if (!plant || !machine || !tags) {
-    return res.status(400).json({ success: false, message: "Missing required query parameters." });
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing required query parameters." });
   }
 
   const tagList = tags.split(",").map((tag) => tag.trim());
