@@ -1,24 +1,31 @@
-import express from 'express';
+import express from "express";
 import { getConnection, sql } from "../db.js";
-import { getThresholdsByMachine, updateThresholds } from "../controllers/thresholdController.js";
+import {
+  getThresholdsByMachine,
+  updateThresholds,
+  getThresholds,
+} from "../controllers/thresholdController.js";
 import { verifyToken } from "../middleware/verifyToken.js";
 
 const router = express.Router();
 
+router.get("/thresholds/all", getThresholds);
 // ✅ Get all thresholds for a specific plant & machine
-router.get('/thresholds', async (req, res) => {
+router.get("/thresholds", async (req, res) => {
   const { plant, machine } = req.query;
 
   if (!plant || !machine) {
-    return res.status(400).json({ message: "Missing plant or machine parameter" });
+    return res
+      .status(400)
+      .json({ message: "Missing plant or machine parameter" });
   }
 
   try {
     const pool = await getConnection();
-    const result = await pool.request()
-      .input('plant', sql.VarChar, plant)
-      .input('machine', sql.VarChar, machine)
-      .query(`
+    const result = await pool
+      .request()
+      .input("plant", sql.VarChar, plant)
+      .input("machine", sql.VarChar, machine).query(`
         SELECT tag_name, min_value, max_value, gauge_min, gauge_max
         FROM cbm_tag_thresholds
         WHERE plant = @plant AND machine = @machine

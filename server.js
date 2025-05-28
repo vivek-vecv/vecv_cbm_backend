@@ -11,16 +11,16 @@ import { runAlertCheck } from "./cron/alertJob.js";
 //import thresholdRoutes from './routes/thresholdRoutes.js';
 import sensorRoutes from "./routes/sensorRoutes.js";
 import machineRoutes from "./routes/machineRoutes.js";
-import dashboardRoutes from './routes/dashboardRoutes.js';
+import dashboardRoutes from "./routes/dashboardRoutes.js";
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4200;
 
 // Cron runs every 2 minutes
-cron.schedule("*/2 * * * *", () => {
-    runAlertCheck();
-  });
+cron.schedule("*/60 * * * *", () => {
+  runAlertCheck();
+});
 
 // ✅ middlewares
 app.use(cors());
@@ -32,8 +32,8 @@ app.use("/api", thresholdRoutes);
 app.use("/api", alertRoutes);
 app.use("/api/sensors", sensorRoutes);
 app.use("/api/machines", machineRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-
+app.use("/api/dashboard", dashboardRoutes);
+console.log("📡 sensorRoutes mounted at /api/sensors");
 console.log("📦 machineRoutes mounted at /api/machines");
 // ✅ test route
 app.get("/", (req, res) => {
@@ -44,7 +44,9 @@ app.get("/", (req, res) => {
 app.get("/api/db-test", async (req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT TOP 1 * FROM cbm_sensor_data ORDER BY id DESC");
+    const result = await pool
+      .request()
+      .query("SELECT TOP 1 * FROM cbm_sensor_data ORDER BY id DESC");
     res.json({ success: true, data: result.recordset });
   } catch (err) {
     console.error("DB Test Error:", err);
@@ -53,6 +55,6 @@ app.get("/api/db-test", async (req, res) => {
 });
 
 // ✅ start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
 });

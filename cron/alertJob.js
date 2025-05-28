@@ -1,91 +1,76 @@
-// Updated alertJob.js with severity logic and duplicate prevention
+// cron/alertJob.js
 import { getConnection, sql } from "../db.js";
 
 export const runAlertCheck = async () => {
-  try {
-    console.log("🔁 Running Alert Check...");
+  console.log("🔁 Running Alert Check...");
 
+  try {
     const pool = await getConnection();
 
-    // Step 1: Get latest sensor row
-    const latestSensorResult = await pool.request().query(`
+    // 1. Get latest row of sensor data
+    const latestSensorRes = await pool.request().query(`
       SELECT TOP 1 * FROM cbm_sensor_data ORDER BY timestamp DESC
     `);
-    const latestSensor = latestSensorResult.recordset[0];
-    if (!latestSensor) return console.log("❌ No sensor data available.");
 
-    // Step 2: Get all tag thresholds
-    const thresholdsResult = await pool.request().query(`
-      SELECT * FROM cbm_tag_thresholds
+    const latestRow = latestSensorRes.recordset[0];
+    if (!latestRow) {
+      console.warn("⚠️ No sensor data found.");
+      return;
+    }
+
+    // 2. Get thresholds
+    const thresholdRes = await pool.request().query(`
+      SELECT plant, machine, tag_name, min_value, max_value
+      FROM cbm_tag_thresholds
     `);
-    const thresholds = thresholdsResult.recordset;
 
-    // Step 3: For each threshold config, compare against sensor value
-    const alertsToInsert = [];
+    const alerts = [];
 
-    for (const threshold of thresholds) {
-      const {
-        plant, machine, tag_name, min_value, max_value, mailRecipients
-      } = threshold;
+    for (const threshold of thresholdRes.recordset) {
+      const { tag_name, plant, machine, min_value, max_value } = threshold;
+      const value = latestRow[tag_name];
 
-      const currentValue = latestSensor[tag_name]; // Match column name
-      if (currentValue == null) continue;
+      if (value == null) continue;
 
-      let severity = null;
-      if (currentValue < min_value * 0.9 || currentValue > max_value * 1.1) {
-        severity = "Critical";
-      } else if (currentValue < min_value || currentValue > max_value) {
-        severity = "Warning";
-      }
-
-      if (!severity) continue;
-
-      // Step 4: Check if duplicate alert (same tag and severity) exists in last 10 min
-      const duplicateCheck = await pool.request()
-        .input("plant", sql.VarChar, plant)
-        .input("machine", sql.VarChar, machine)
-        .input("tag_name", sql.VarChar, tag_name)
-        .input("severity", sql.VarChar, severity)
-        .query(`
-          SELECT COUNT(*) AS count
-          FROM cbm_alerts
-          WHERE plant = @plant AND machine = @machine AND tag_name = @tag_name
-            AND severity = @severity AND time_triggered >= DATEADD(MINUTE, -10, GETDATE())
-        `);
-
-      const alreadyExists = duplicateCheck.recordset[0].count > 0;
-      if (!alreadyExists) {
-        alertsToInsert.push({
+      if (value < min_value || value > max_value) {
+        alerts.push({
           plant,
           machine,
           tag_name,
-          value: currentValue,
-          time_triggered: new Date(),
-          resolved_flag: 0,
-          severity,
-          mail_recipients: mailRecipients || null,
+          value,
+          status: "Alert",
+          timestamp: latestRow.timestamp,
         });
       }
     }
 
-    // Step 5: Insert alerts
-    for (const alert of alertsToInsert) {
-      await pool.request()
-        .input("plant", sql.VarChar, alert.plant)
-        .input("machine", sql.VarChar, alert.machine)
-        .input("tag_name", sql.VarChar, alert.tag_name)
-        .input("value", sql.Float, alert.value)
-        .input("time_triggered", sql.DateTime, alert.time_triggered)
-        .input("resolved_flag", sql.Int, alert.resolved_flag)
-        .input("severity", sql.VarChar, alert.severity)
-        .input("mail_recipients", sql.VarChar, alert.mail_recipients)
-        .query(`
-          INSERT INTO cbm_alerts (plant, machine, tag_name, value, time_triggered, resolved_flag, severity, mail_recipients)
-          VALUES (@plant, @machine, @tag_name, @value, @time_triggered, @resolved_flag, @severity, @mail_recipients)
-        `);
-    }
+    // 3. Insert new alerts (if any)
+    if (alerts.length > 0) {
+      const table = new sql.Table("cbm_alerts");
+      table.create = false;
+      table.columns.add("plant", sql.VarChar(50));
+      table.columns.add("machine", sql.VarChar(100));
+      table.columns.add("tag_name", sql.VarChar(100));
+      table.columns.add("value", sql.Float);
+      table.columns.add("status", sql.VarChar(20));
+      table.columns.add("timestamp", sql.DateTime);
 
-    console.log(`⚠️ Inserted ${alertsToInsert.length} alerts`);
+      alerts.forEach((a) => {
+        table.rows.add(
+          a.plant,
+          a.machine,
+          a.tag_name,
+          a.value,
+          a.status,
+          a.timestamp
+        );
+      });
+
+      await pool.request().bulk(table);
+      console.log(`⚠️ Inserted ${alerts.length} alerts.`);
+    } else {
+      console.log("✅ No alerts triggered.");
+    }
   } catch (err) {
     console.error("❌ Alert Job Error:", err);
   }

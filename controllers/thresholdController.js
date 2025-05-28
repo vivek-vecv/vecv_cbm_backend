@@ -8,6 +8,7 @@ export const getThresholds = async (req, res) => {
       SELECT 
         plant,
         machine,
+        line,
         tag_name,
         min_value,
         max_value,
@@ -34,9 +35,18 @@ export const updateThresholds = async (req, res) => {
     const pool = await getConnection();
 
     const queries = payload.map((row) => {
-      const { plant, machine, tag_name, min_value, max_value, gauge_min, gauge_max } = row;
+      const {
+        plant,
+        machine,
+        tag_name,
+        min_value,
+        max_value,
+        gauge_min,
+        gauge_max,
+      } = row;
 
-      return pool.request()
+      return pool
+        .request()
         .input("plant", sql.VarChar, plant)
         .input("machine", sql.VarChar, machine)
         .input("tag_name", sql.VarChar, tag_name)
@@ -44,8 +54,7 @@ export const updateThresholds = async (req, res) => {
         .input("max_value", sql.Float, max_value)
         .input("gauge_min", sql.Float, gauge_min)
         .input("gauge_max", sql.Float, gauge_max)
-        .input("updated_by", sql.VarChar, updatedBy)
-        .query(`
+        .input("updated_by", sql.VarChar, updatedBy).query(`
           MERGE cbm_tag_thresholds AS target
           USING (SELECT @plant AS plant, @machine AS machine, @tag_name AS tag_name) AS source
           ON target.plant = source.plant AND target.machine = source.machine AND target.tag_name = source.tag_name
@@ -65,7 +74,6 @@ export const updateThresholds = async (req, res) => {
 
     await Promise.all(queries);
     res.json({ success: true, message: "Thresholds updated successfully" });
-
   } catch (err) {
     console.error("❌ Error updating thresholds:", err);
     res.status(500).json({ success: false, message: "Server error" });
@@ -77,13 +85,14 @@ export const getThresholdsByMachine = async (req, res) => {
   const { name, line } = req.query;
 
   if (!name || !line) {
-    return res.status(400).json({ success: false, message: "Missing machine name or line." });
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing machine name or line." });
   }
 
   try {
     const pool = await getConnection();
-    const result = await pool.request()
-      .input("machine", sql.VarChar, name)
+    const result = await pool.request().input("machine", sql.VarChar, name)
       .query(`
         SELECT tag_name, min_value, max_value, gauge_min, gauge_max
         FROM cbm_tag_thresholds

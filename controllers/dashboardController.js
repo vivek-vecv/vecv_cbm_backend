@@ -1,56 +1,63 @@
 // controllers/dashboardController.js
 import { getConnection, sql } from "../db.js";
 
-// ✅ Get overall machine health summary by plant (used in PlantCards.jsx)
+// -----------------------------
+// ✅ Caching Setup
+// -----------------------------
+let cachedLineStatus = {};
+let cachedSummary = {};
+const CACHE_DURATION = 30000; // 30 seconds
+
+// -----------------------------
+// ✅ Get Status Summary (Plant Cards)
+// -----------------------------
 export const getStatusSummary = async (req, res) => {
+  const { plant } = req.query;
+  if (!plant)
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing plant param" });
+
+  const now = Date.now();
+  if (
+    cachedSummary[plant] &&
+    now - cachedSummary[plant].timestamp < CACHE_DURATION
+  ) {
+    console.log(`✅ [CACHE] StatusSummary for plant: ${plant}`);
+    return res.json({ success: true, data: cachedSummary[plant].data });
+  }
+
   try {
     const pool = await getConnection();
+    const start = Date.now();
 
-    const thresholdRes = await pool.request().query(`
-      SELECT plant, machine, tag_name, line
-      FROM cbm_tag_thresholds
-    `);
+    const thresholdRes = await pool
+      .request()
+      .input("plant", sql.VarChar, plant)
+      .query(`SELECT tag_name FROM cbm_tag_thresholds WHERE plant = @plant`);
 
-    const tagMap = {};
-    const now = new Date();
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-
-    thresholdRes.recordset.forEach(({ plant, machine, tag_name, line }) => {
-      const key = `${plant}|${machine}`;
-      if (!tagMap[key]) tagMap[key] = { plant, machine, line, tags: [] };
-      tagMap[key].tags.push(tag_name);
-    });
+    const tagList = thresholdRes.recordset.map((row) => row.tag_name);
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
     const sensorRes = await pool.request().query(`
-      SELECT * FROM cbm_sensor_data
-      WHERE timestamp >= '${oneHourAgo.toISOString()}'
+      SELECT TOP 5000 * FROM cbm_sensor_data WHERE timestamp >= '${oneHourAgo.toISOString()}'
     `);
 
     const activeMap = {};
     sensorRes.recordset.forEach((row) => {
-      Object.keys(row).forEach((key) => {
-        if (key !== "timestamp" && key !== "id" && row[key] != null) {
-          activeMap[key] = (activeMap[key] || 0) + 1;
-        }
+      tagList.forEach((tag) => {
+        if (row[tag] != null) activeMap[tag] = true;
       });
     });
 
-    const summary = {};
-    Object.values(tagMap).forEach(({ plant, tags }) => {
-      const total = tags.length;
-      const active = tags.filter((tag) => activeMap[tag]).length;
-      if (!summary[plant]) summary[plant] = { total: 0, active: 0 };
-      summary[plant].total += total;
-      summary[plant].active += active;
-    });
+    const activeCount = tagList.filter((tag) => activeMap[tag]).length;
+    const total = tagList.length;
+    const percent = total > 0 ? Math.round((activeCount / total) * 100) : 0;
 
-    const result = {};
-    for (const [plant, stats] of Object.entries(summary)) {
-      result[plant] = stats.total > 0
-        ? Math.round((stats.active / stats.total) * 100)
-        : 0;
-    }
+    const result = { [plant]: percent };
+    cachedSummary[plant] = { timestamp: now, data: result };
 
+    console.log(`⏱️ getStatusSummary executed in ${Date.now() - start}ms`);
     res.json({ success: true, data: result });
   } catch (err) {
     console.error("❌ getStatusSummary error:", err);
@@ -58,29 +65,63 @@ export const getStatusSummary = async (req, res) => {
   }
 };
 
-// ✅ Line-wise machine running/stopped status (used in LineStatusBarChart.jsx)
+// -----------------------------
+// ✅ Line-wise Running/Stopped Chart
+// -----------------------------
 export const getLineStatusByPlant = async (req, res) => {
   const { plant } = req.query;
-  if (!plant) return res.status(400).json({ success: false, message: "Missing plant param" });
+  if (!plant)
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing plant param" });
+
+  const now = Date.now();
+  if (
+    cachedLineStatus[plant] &&
+    now - cachedLineStatus[plant].timestamp < CACHE_DURATION
+  ) {
+    console.log(`✅ [CACHE] LineStatus for plant: ${plant}`);
+    return res.json({ success: true, data: cachedLineStatus[plant].data });
+  }
 
   try {
     const pool = await getConnection();
-    const thresholds = await pool.request()
-      .input("plant", sql.VarChar, plant)
-      .query(`SELECT machine, line, tag_name FROM cbm_tag_thresholds WHERE plant = @plant`);
+    const start = Date.now();
 
-    const sensorData = await pool.request().query(`
-      SELECT * FROM cbm_sensor_data WHERE timestamp >= DATEADD(MINUTE, -60, GETDATE())
+    const thresholds = await pool
+      .request()
+      .input("plant", sql.VarChar, plant)
+      .query(
+        `SELECT machine, line, tag_name FROM cbm_tag_thresholds WHERE plant = @plant`
+      );
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const sensorRes = await pool.request().query(`
+      SELECT TOP 5000 * FROM cbm_sensor_data WHERE timestamp >= '${oneHourAgo.toISOString()}'
     `);
+
+    const sensorRows = sensorRes.recordset;
+    const tagPresence = {};
+
+    sensorRows.forEach((row) => {
+      thresholds.recordset.forEach(({ tag_name }) => {
+        if (row[tag_name] != null) tagPresence[tag_name] = true;
+      });
+    });
 
     const grouped = {};
     thresholds.recordset.forEach(({ line, tag_name }) => {
       if (!grouped[line]) grouped[line] = { Running: 0, Stopped: 0 };
-      const isActive = sensorData.recordset.some(row => row[tag_name] !== null);
-      grouped[line][isActive ? 'Running' : 'Stopped']++;
+      grouped[line][tagPresence[tag_name] ? "Running" : "Stopped"]++;
     });
 
-    const result = Object.entries(grouped).map(([line, counts]) => ({ line, ...counts }));
+    const result = Object.entries(grouped).map(([line, counts]) => ({
+      line,
+      ...counts,
+    }));
+    cachedLineStatus[plant] = { timestamp: now, data: result };
+
+    console.log(`⏱️ getLineStatusByPlant executed in ${Date.now() - start}ms`);
     res.json({ success: true, data: result });
   } catch (err) {
     console.error("❌ getLineStatusByPlant error:", err);
@@ -88,22 +129,30 @@ export const getLineStatusByPlant = async (req, res) => {
   }
 };
 
-// ✅ Tag-wise health classification (Normal / Warning / Critical) (used in TagStatusPieChart.jsx)
+// -----------------------------
+// ✅ Tag Status (Pie Chart)
+// -----------------------------
 export const getTagHealthByPlant = async (req, res) => {
   const { plant } = req.query;
-  if (!plant) return res.status(400).json({ success: false, message: "Missing plant param" });
+  if (!plant)
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing plant param" });
 
   try {
     const pool = await getConnection();
-    const thresholds = await pool.request()
+    const thresholds = await pool
+      .request()
       .input("plant", sql.VarChar, plant)
-      .query(`SELECT machine, tag_name, min_value, max_value FROM cbm_tag_thresholds WHERE plant = @plant`);
+      .query(
+        `SELECT machine, tag_name, min_value, max_value FROM cbm_tag_thresholds WHERE plant = @plant`
+      );
 
-    const sensorData = await pool.request().query(`
+    const sensorRes = await pool.request().query(`
       SELECT TOP 1 * FROM cbm_sensor_data ORDER BY timestamp DESC
     `);
 
-    const row = sensorData.recordset[0];
+    const row = sensorRes.recordset[0];
     const summary = { Normal: 0, Warning: 0, Critical: 0 };
 
     thresholds.recordset.forEach(({ tag_name, min_value, max_value }) => {
@@ -114,7 +163,10 @@ export const getTagHealthByPlant = async (req, res) => {
       else summary.Normal++;
     });
 
-    const result = Object.entries(summary).map(([name, value]) => ({ name, value }));
+    const result = Object.entries(summary).map(([name, value]) => ({
+      name,
+      value,
+    }));
     res.json({ success: true, data: result });
   } catch (err) {
     console.error("❌ getTagHealthByPlant error:", err);
