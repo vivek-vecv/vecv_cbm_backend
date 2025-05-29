@@ -36,6 +36,7 @@ export const getLatestSensorData = async (req, res) => {
   }
 
   try {
+    console.log("📡 Hit /api/sensors/latest");
     const pool = await getConnection();
     const request = pool.request();
     const start = Date.now();
